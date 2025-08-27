@@ -3,12 +3,43 @@ let uploadedData = null;
 let outputFormat = null;
 let chapterRegionMap = null;
 let processedData = null;
+let currentTab = 'geocoded';
+
+// Geocodio API configuration
+const GEOCODIO_API_KEY = 'da6a76cf6fa5ad2fac2a2acdae8e6e868688a86';
+const GEOCODIO_API_URL = 'https://api.geocod.io/v1.7/geocode';
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', async () => {
     await loadReferenceFiles();
     setupEventListeners();
+    
+    // Pre-fill API key if provided
+    const apiKeyInput = document.getElementById('apiKey');
+    if (apiKeyInput && GEOCODIO_API_KEY) {
+        apiKeyInput.value = GEOCODIO_API_KEY;
+    }
 });
+
+// Switch between tabs
+function switchTab(tab) {
+    currentTab = tab;
+    
+    // Update tab styles
+    document.querySelectorAll('.tab').forEach(t => {
+        t.classList.remove('active');
+    });
+    event.target.classList.add('active');
+    
+    // Update content
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+    });
+    document.getElementById(`${tab}-tab`).classList.add('active');
+    
+    // Clear any previous uploads
+    clearData();
+}
 
 // Load the reference CSV files
 async function loadReferenceFiles() {
@@ -44,72 +75,221 @@ async function loadReferenceFiles() {
 
 // Setup event listeners
 function setupEventListeners() {
-    const uploadArea = document.getElementById('uploadArea');
-    const fileInput = document.getElementById('fileInput');
-    const convertBtn = document.getElementById('convertBtn');
-    const clearBtn = document.getElementById('clearBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
+    // CSV upload
+    const uploadAreaCsv = document.getElementById('uploadAreaCsv');
+    const fileInputCsv = document.getElementById('fileInputCsv');
     
-    // Click to upload
-    uploadArea.addEventListener('click', () => {
-        fileInput.click();
+    uploadAreaCsv.addEventListener('click', () => {
+        fileInputCsv.click();
     });
     
-    // Drag and drop
-    uploadArea.addEventListener('dragover', (e) => {
+    setupDragAndDrop(uploadAreaCsv, (file) => {
+        handleFile(file, 'csv');
+    });
+    
+    fileInputCsv.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFile(e.target.files[0], 'csv');
+        }
+    });
+    
+    // XLSX upload
+    const uploadAreaXlsx = document.getElementById('uploadAreaXlsx');
+    const fileInputXlsx = document.getElementById('fileInputXlsx');
+    
+    uploadAreaXlsx.addEventListener('click', () => {
+        fileInputXlsx.click();
+    });
+    
+    setupDragAndDrop(uploadAreaXlsx, (file) => {
+        handleFile(file, 'xlsx');
+    });
+    
+    fileInputXlsx.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFile(e.target.files[0], 'xlsx');
+        }
+    });
+    
+    // Buttons
+    document.getElementById('convertBtn').addEventListener('click', processData);
+    document.getElementById('clearBtn').addEventListener('click', clearData);
+    document.getElementById('downloadBtn').addEventListener('click', downloadResult);
+}
+
+// Setup drag and drop for an upload area
+function setupDragAndDrop(element, callback) {
+    element.addEventListener('dragover', (e) => {
         e.preventDefault();
-        uploadArea.classList.add('dragover');
+        element.classList.add('dragover');
     });
     
-    uploadArea.addEventListener('dragleave', () => {
-        uploadArea.classList.remove('dragover');
+    element.addEventListener('dragleave', () => {
+        element.classList.remove('dragover');
     });
     
-    uploadArea.addEventListener('drop', (e) => {
+    element.addEventListener('drop', (e) => {
         e.preventDefault();
-        uploadArea.classList.remove('dragover');
+        element.classList.remove('dragover');
         
         const files = e.dataTransfer.files;
         if (files.length > 0) {
-            handleFile(files[0]);
+            callback(files[0]);
         }
     });
-    
-    // File input change
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            handleFile(e.target.files[0]);
-        }
-    });
-    
-    // Convert button
-    convertBtn.addEventListener('click', processData);
-    
-    // Clear button
-    clearBtn.addEventListener('click', clearData);
-    
-    // Download button
-    downloadBtn.addEventListener('click', downloadResult);
 }
 
 // Handle uploaded file
-function handleFile(file) {
-    if (!file.name.endsWith('.csv')) {
+async function handleFile(file, expectedType) {
+    if (expectedType === 'csv' && !file.name.endsWith('.csv')) {
         showStatus('Please upload a CSV file', 'error');
         return;
     }
     
-    const reader = new FileReader();
-    reader.onload = (e) => {
+    if (expectedType === 'xlsx' && !file.name.endsWith('.xlsx')) {
+        showStatus('Please upload an Excel (XLSX) file', 'error');
+        return;
+    }
+    
+    if (expectedType === 'xlsx') {
+        // Handle Excel file
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                showStatus('Reading Excel file...', 'processing');
+                
+                // Parse Excel file using SheetJS
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+                
+                // Check for API key
+                const apiKey = document.getElementById('apiKey').value.trim();
+                if (!apiKey) {
+                    showStatus('Please enter your Geocodio API key', 'error');
+                    return;
+                }
+                
+                // Geocode the data
+                showStatus('Starting geocoding process...', 'processing');
+                document.querySelector('.geocoding-progress').classList.add('show');
+                
+                uploadedData = await geocodeData(jsonData, apiKey);
+                
+                displayFileInfo(file.name, uploadedData);
+                showStatus('File loaded and geocoded successfully', 'success');
+                document.querySelector('.geocoding-progress').classList.remove('show');
+                
+            } catch (error) {
+                console.error('Error processing Excel file:', error);
+                showStatus('Error processing file: ' + error.message, 'error');
+                document.querySelector('.geocoding-progress').classList.remove('show');
+            }
+        };
+        reader.readAsArrayBuffer(file);
+        
+    } else {
+        // Handle CSV file
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                uploadedData = parseCSV(e.target.result);
+                displayFileInfo(file.name, uploadedData);
+                showStatus('File loaded successfully', 'success');
+            } catch (error) {
+                showStatus('Error reading file: ' + error.message, 'error');
+            }
+        };
+        reader.readAsText(file);
+    }
+}
+
+// Geocode data using Geocodio API
+async function geocodeData(data, apiKey) {
+    const geocodedData = [];
+    const batchSize = 100; // Geocodio allows up to 10,000 per request, but we'll do smaller batches
+    
+    for (let i = 0; i < data.length; i += batchSize) {
+        const batch = data.slice(i, Math.min(i + batchSize, data.length));
+        
+        // Update progress
+        const progress = Math.round((i / data.length) * 100);
+        document.getElementById('progressFill').style.width = progress + '%';
+        document.getElementById('progressFill').textContent = progress + '%';
+        document.getElementById('progressText').textContent = `Geocoding records ${i + 1} to ${Math.min(i + batchSize, data.length)} of ${data.length}...`;
+        
         try {
-            uploadedData = parseCSV(e.target.result);
-            displayFileInfo(file.name, uploadedData);
-            showStatus('File loaded successfully', 'success');
+            // Prepare addresses for batch geocoding
+            const addresses = batch.map(row => {
+                const address = `${row['Address'] || ''}, ${row['City'] || ''}, ${row['ST'] || ''} ${row['Zip Code'] || ''}`.trim();
+                return address;
+            });
+            
+            // Make batch geocoding request
+            const response = await fetch(`${GEOCODIO_API_URL}?api_key=${apiKey}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(addresses)
+            });
+            
+            if (!response.ok) {
+                throw new Error(`Geocoding failed: ${response.statusText}`);
+            }
+            
+            const results = await response.json();
+            
+            // Combine original data with geocoding results
+            batch.forEach((row, index) => {
+                const geocodeResult = results.results[index];
+                const geocodedRow = { ...row };
+                
+                if (geocodeResult && geocodeResult.results && geocodeResult.results.length > 0) {
+                    const bestMatch = geocodeResult.results[0];
+                    
+                    // Add geocoded fields
+                    geocodedRow['Geocoded_Address'] = bestMatch.formatted_address || '';
+                    geocodedRow['Geocoded_Street'] = bestMatch.address_components.formatted_street || '';
+                    geocodedRow['Geocoded_City'] = bestMatch.address_components.city || '';
+                    geocodedRow['Geocoded_State'] = bestMatch.address_components.state || '';
+                    geocodedRow['Geocoded_Zip'] = bestMatch.address_components.zip || '';
+                    geocodedRow['Geocoded_County'] = bestMatch.address_components.county || '';
+                    geocodedRow['Latitude'] = bestMatch.location.lat || '';
+                    geocodedRow['Longitude'] = bestMatch.location.lng || '';
+                    geocodedRow['Accuracy'] = bestMatch.accuracy || '';
+                    geocodedRow['Accuracy_Type'] = bestMatch.accuracy_type || '';
+                }
+                
+                // Extract county from geocoded data if available
+                if (geocodedRow['Geocoded_County']) {
+                    geocodedRow['County'] = geocodedRow['Geocoded_County'].replace(' County', '');
+                }
+                
+                geocodedData.push(geocodedRow);
+            });
+            
         } catch (error) {
-            showStatus('Error reading file: ' + error.message, 'error');
+            console.error('Batch geocoding error:', error);
+            // Add ungeocoded data for this batch
+            batch.forEach(row => {
+                geocodedData.push(row);
+            });
         }
-    };
-    reader.readAsText(file);
+        
+        // Small delay to avoid rate limiting
+        if (i + batchSize < data.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+    }
+    
+    // Final progress update
+    document.getElementById('progressFill').style.width = '100%';
+    document.getElementById('progressFill').textContent = '100%';
+    document.getElementById('progressText').textContent = 'Geocoding complete!';
+    
+    return geocodedData;
 }
 
 // Parse CSV text into array of objects
@@ -227,20 +407,26 @@ function processData() {
 
 // Map columns from input to output format
 function mapColumn(outputHeader, inputRow) {
-    // Common column mappings (adjust based on actual data)
+    // Common column mappings (adjusted for both CSV and XLSX formats)
     const columnMappings = {
         'Name': ['Name', 'Full Name', 'Volunteer Name', 'name'],
-        'Address': ['Address', 'Street Address', 'address', 'Address 1'],
-        'City': ['City', 'city', 'Town'],
-        'State': ['State', 'state', 'ST'],
-        'Zip': ['Zip', 'ZIP', 'Postal Code', 'zip', 'Zip Code'],
-        'County': ['County', 'county', 'County Name'],
+        'Address': ['Address', 'Street Address', 'address', 'Address 1', 'Geocoded_Street'],
+        'City': ['City', 'city', 'Town', 'Geocoded_City'],
+        'State': ['State', 'state', 'ST', 'Geocoded_State'],
+        'Zip': ['Zip', 'ZIP', 'Postal Code', 'zip', 'Zip Code', 'Geocoded_Zip'],
+        'County': ['County', 'county', 'County Name', 'Geocoded_County'],
         'Chapter': ['Chapter', 'chapter', 'NEW Chapter'],
         'Region': ['Region', 'region', 'NEW Region'],
         'Email': ['Email', 'email', 'Email Address'],
         'Phone': ['Phone', 'phone', 'Phone Number', 'Cell Phone'],
         'Latitude': ['Latitude', 'lat', 'LAT', 'latitude'],
-        'Longitude': ['Longitude', 'lng', 'LON', 'longitude', 'long']
+        'Longitude': ['Longitude', 'lng', 'LON', 'longitude', 'long'],
+        'Position': ['Position', 'position', 'Role'],
+        'GAP': ['GAP', 'gap'],
+        'CAC Card': ['CAC Card', 'CAC_Card', 'CAC'],
+        'RC Care Roles': ['RC Care Roles', 'RC_Care_Roles'],
+        '1st Resp Case Count': ['1st Resp Case Count', '1st_Resp_Case_Count'],
+        '2nd Resp Case Count': ['2nd Resp Case Count', '2nd_Resp_Case_Count']
     };
     
     // Try to find matching column
@@ -248,7 +434,7 @@ function mapColumn(outputHeader, inputRow) {
     
     for (const col of possibleColumns) {
         // Try exact match
-        if (inputRow[col] !== undefined) {
+        if (inputRow[col] !== undefined && inputRow[col] !== null && inputRow[col] !== 'nan') {
             return inputRow[col];
         }
         
@@ -258,13 +444,13 @@ function mapColumn(outputHeader, inputRow) {
             key.toLowerCase() === col.toLowerCase()
         );
         
-        if (matchedKey) {
+        if (matchedKey && inputRow[matchedKey] !== 'nan') {
             return inputRow[matchedKey];
         }
     }
     
     // Check for geocoded versions (usually have prefix like "geocoded_" or suffix like "_geocoded")
-    const geocodedPrefixes = ['geocoded_', 'geo_', 'corrected_'];
+    const geocodedPrefixes = ['geocoded_', 'geo_', 'corrected_', 'Geocoded_'];
     const geocodedSuffixes = ['_geocoded', '_geo', '_corrected'];
     
     for (const prefix of geocodedPrefixes) {
@@ -273,7 +459,7 @@ function mapColumn(outputHeader, inputRow) {
             const matchedKey = Object.keys(inputRow).find(key => 
                 key.toLowerCase() === prefixedCol.toLowerCase()
             );
-            if (matchedKey) {
+            if (matchedKey && inputRow[matchedKey] !== 'nan') {
                 return inputRow[matchedKey];
             }
         }
@@ -285,7 +471,7 @@ function mapColumn(outputHeader, inputRow) {
             const matchedKey = Object.keys(inputRow).find(key => 
                 key.toLowerCase() === suffixedCol.toLowerCase()
             );
-            if (matchedKey) {
+            if (matchedKey && inputRow[matchedKey] !== 'nan') {
                 return inputRow[matchedKey];
             }
         }
@@ -301,9 +487,9 @@ function updateChapterRegion(outputRow, inputRow) {
     
     // If no county in output, try to find it in input
     if (!county) {
-        const countyColumns = ['County', 'county', 'County Name', 'COUNTY'];
+        const countyColumns = ['County', 'county', 'County Name', 'COUNTY', 'Geocoded_County'];
         for (const col of countyColumns) {
-            if (inputRow[col]) {
+            if (inputRow[col] && inputRow[col] !== 'nan') {
                 county = inputRow[col];
                 break;
             }
@@ -324,42 +510,46 @@ function updateChapterRegion(outputRow, inputRow) {
 // Prioritize geocoded addresses over volunteer-entered ones
 function prioritizeGeocodedAddress(outputRow, inputRow) {
     // Look for geocoded address fields
-    const geocodedIndicators = ['geocoded', 'corrected', 'validated', 'standardized'];
+    const geocodedIndicators = ['geocoded', 'corrected', 'validated', 'standardized', 'Geocoded'];
     
     Object.keys(inputRow).forEach(key => {
         const lowerKey = key.toLowerCase();
         
-        // Check if this is a geocoded address field
+        // Check if this is a geocoded field
         const isGeocoded = geocodedIndicators.some(indicator => 
-            lowerKey.includes(indicator)
+            lowerKey.includes(indicator.toLowerCase())
         );
         
         if (isGeocoded) {
             // Map geocoded fields to output fields
             if (lowerKey.includes('address') || lowerKey.includes('street')) {
-                if (inputRow[key] && inputRow[key].trim()) {
+                if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
                     outputRow['Address'] = inputRow[key];
                 }
-            } else if (lowerKey.includes('city')) {
-                if (inputRow[key] && inputRow[key].trim()) {
+            } else if (lowerKey.includes('city') && !lowerKey.includes('accuracy')) {
+                if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
                     outputRow['City'] = inputRow[key];
                 }
             } else if (lowerKey.includes('state')) {
-                if (inputRow[key] && inputRow[key].trim()) {
+                if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
                     outputRow['State'] = inputRow[key];
                 }
             } else if (lowerKey.includes('zip') || lowerKey.includes('postal')) {
-                if (inputRow[key] && inputRow[key].trim()) {
+                if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
                     outputRow['Zip'] = inputRow[key];
                 }
-            } else if (lowerKey.includes('lat')) {
-                if (inputRow[key] && inputRow[key].trim()) {
-                    outputRow['Latitude'] = inputRow[key];
-                }
-            } else if (lowerKey.includes('lon') || lowerKey.includes('lng')) {
-                if (inputRow[key] && inputRow[key].trim()) {
-                    outputRow['Longitude'] = inputRow[key];
-                }
+            }
+        }
+        
+        // Always use Latitude/Longitude if available (these are typically geocoded)
+        if (key === 'Latitude' || lowerKey === 'latitude' || lowerKey === 'lat') {
+            if (inputRow[key] && inputRow[key] !== 'nan') {
+                outputRow['Latitude'] = inputRow[key];
+            }
+        }
+        if (key === 'Longitude' || lowerKey === 'longitude' || lowerKey === 'lng' || lowerKey === 'long') {
+            if (inputRow[key] && inputRow[key] !== 'nan') {
+                outputRow['Longitude'] = inputRow[key];
             }
         }
     });
@@ -372,7 +562,9 @@ function clearData() {
     document.getElementById('fileInfo').classList.remove('show');
     document.getElementById('downloadSection').classList.remove('show');
     document.getElementById('status').classList.remove('show');
-    document.getElementById('fileInput').value = '';
+    document.getElementById('fileInputCsv').value = '';
+    document.getElementById('fileInputXlsx').value = '';
+    document.querySelector('.geocoding-progress').classList.remove('show');
 }
 
 // Download the processed result
@@ -426,3 +618,6 @@ function showStatus(message, type) {
         }, 5000);
     }
 }
+
+// Make switchTab global
+window.switchTab = switchTab;
