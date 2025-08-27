@@ -1,0 +1,23 @@
+{
+  "name": "dat-new-day-project",
+  "version": "1.0.0",
+  "description": "## Project Overview",
+  "main": "app-old.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/franzenjb/dat-new-day-project.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/franzenjb/dat-new-day-project/issues"
+  },
+  "homepage": "https://github.com/franzenjb/dat-new-day-project#readme",
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

@@ -60,11 +60,13 @@ async function loadReferenceFiles() {
             if (row['County']) {
                 const county = row['County'].trim().toUpperCase();
                 chapterRegionMap[county] = {
-                    chapter: row['Chapter'] || row['NEW Chapter'] || '',
-                    region: row['Region'] || row['NEW Region'] || ''
+                    chapter: row['News Chapters'] || row['Old Chapter'] || '',
+                    region: row['New Regions'] || row['Old Region'] || ''
                 };
             }
         });
+        
+        console.log('Chapter/Region map created:', Object.keys(chapterRegionMap).length, 'counties');
         
         console.log('Reference files loaded successfully');
     } catch (error) {
@@ -387,11 +389,23 @@ function processData() {
                 outputRow[header] = mapColumn(header, inputRow);
             });
             
+            // Apply proper case formatting to address fields
+            if (outputRow['Address']) outputRow['Address'] = toProperCase(outputRow['Address']);
+            if (outputRow['City']) outputRow['City'] = toProperCase(outputRow['City']);
+            if (outputRow['State']) outputRow['State'] = outputRow['State'].toUpperCase();
+            if (outputRow['County']) outputRow['County'] = toProperCase(outputRow['County']);
+            
             // Update chapter and region based on county
             updateChapterRegion(outputRow, inputRow);
             
             // Prioritize geocoded addresses
             prioritizeGeocodedAddress(outputRow, inputRow);
+            
+            // Generate Icon field based on Position and RC Care Roles
+            generateIconField(outputRow, inputRow);
+            
+            // Add ArcGIS-specific fields
+            addArcGISFields(outputRow, processedData.length);
             
             processedData.push(outputRow);
         });
@@ -414,7 +428,7 @@ function mapColumn(outputHeader, inputRow) {
         'City': ['City', 'city', 'Town', 'Geocoded_City'],
         'State': ['State', 'state', 'ST', 'Geocoded_State'],
         'Zip': ['Zip', 'ZIP', 'Postal Code', 'zip', 'Zip Code', 'Geocoded_Zip'],
-        'County': ['County', 'county', 'County Name', 'Geocoded_County'],
+        'County': ['County', 'county', 'County Name', 'Geocoded_County', 'Geocodio County'],
         'Chapter': ['Chapter', 'chapter', 'NEW Chapter'],
         'Region': ['Region', 'region', 'NEW Region'],
         'Email': ['Email', 'email', 'Email Address'],
@@ -487,10 +501,11 @@ function updateChapterRegion(outputRow, inputRow) {
     
     // If no county in output, try to find it in input
     if (!county) {
-        const countyColumns = ['County', 'county', 'County Name', 'COUNTY', 'Geocoded_County'];
+        const countyColumns = ['Geocodio County', 'County', 'county', 'County Name', 'COUNTY', 'Geocoded_County'];
         for (const col of countyColumns) {
-            if (inputRow[col] && inputRow[col] !== 'nan') {
+            if (inputRow[col] && inputRow[col] !== 'nan' && inputRow[col] !== '') {
                 county = inputRow[col];
+                outputRow['County'] = county; // Make sure to set it in output
                 break;
             }
         }
@@ -503,6 +518,9 @@ function updateChapterRegion(outputRow, inputRow) {
         if (chapterRegionMap[cleanCounty]) {
             outputRow['Chapter'] = chapterRegionMap[cleanCounty].chapter;
             outputRow['Region'] = chapterRegionMap[cleanCounty].region;
+            console.log(`Mapped ${cleanCounty} to Chapter: ${outputRow['Chapter']}, Region: ${outputRow['Region']}`);
+        } else {
+            console.log(`No mapping found for county: ${cleanCounty}`);
         }
     }
 }
@@ -524,15 +542,15 @@ function prioritizeGeocodedAddress(outputRow, inputRow) {
             // Map geocoded fields to output fields
             if (lowerKey.includes('address') || lowerKey.includes('street')) {
                 if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
-                    outputRow['Address'] = inputRow[key];
+                    outputRow['Address'] = toProperCase(inputRow[key]);
                 }
             } else if (lowerKey.includes('city') && !lowerKey.includes('accuracy')) {
                 if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
-                    outputRow['City'] = inputRow[key];
+                    outputRow['City'] = toProperCase(inputRow[key]);
                 }
             } else if (lowerKey.includes('state')) {
                 if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
-                    outputRow['State'] = inputRow[key];
+                    outputRow['State'] = inputRow[key].toUpperCase(); // States should be uppercase
                 }
             } else if (lowerKey.includes('zip') || lowerKey.includes('postal')) {
                 if (inputRow[key] && inputRow[key].trim() && inputRow[key] !== 'nan') {
@@ -552,6 +570,88 @@ function prioritizeGeocodedAddress(outputRow, inputRow) {
                 outputRow['Longitude'] = inputRow[key];
             }
         }
+    });
+}
+
+// Generate Icon field based on Position and RC Care Roles
+function generateIconField(outputRow, inputRow) {
+    const position = outputRow['Position'] || '';
+    const rcCareRoles = outputRow['RC Care Roles'] || inputRow['RC Care Roles'] || '';
+    
+    if (position) {
+        // Check if they have RC Care Roles
+        if (rcCareRoles && rcCareRoles.trim() !== '') {
+            outputRow['Icon'] = position + ' & RC';
+        } else {
+            outputRow['Icon'] = position;
+        }
+    } else {
+        outputRow['Icon'] = '';
+    }
+}
+
+// Add ArcGIS-specific fields
+function addArcGISFields(outputRow, index) {
+    // Generate ObjectId (starting from a base number)
+    outputRow['ObjectId'] = outputRow['ObjectId'] || (5817 + index).toString();
+    
+    // Generate GlobalID (UUID format)
+    if (!outputRow['GlobalID']) {
+        outputRow['GlobalID'] = generateUUID();
+    }
+    
+    // Add timestamps if not present
+    const now = new Date();
+    const dateStr = `${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear() % 100} ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+    
+    outputRow['CreationDate'] = outputRow['CreationDate'] || dateStr;
+    outputRow['EditDate'] = outputRow['EditDate'] || dateStr;
+    outputRow['Creator'] = outputRow['Creator'] || '';
+    outputRow['Editor'] = outputRow['Editor'] || '';
+    
+    // Copy Longitude/Latitude to x/y if available
+    if (outputRow['Longitude']) {
+        outputRow['x'] = outputRow['Longitude'];
+    }
+    if (outputRow['Latitude']) {
+        outputRow['y'] = outputRow['Latitude'];
+    }
+}
+
+// Generate UUID for GlobalID
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+// Convert text to proper case (Title Case)
+function toProperCase(str) {
+    if (!str) return '';
+    
+    // Special cases that should remain uppercase
+    const keepUppercase = ['FL', 'USA', 'US', 'NE', 'NW', 'SE', 'SW', 'PO', 'II', 'III', 'IV'];
+    
+    // Words that should remain lowercase (unless first word)
+    const keepLowercase = ['a', 'an', 'and', 'as', 'at', 'by', 'for', 'from', 'in', 'of', 'on', 'or', 'the', 'to', 'with'];
+    
+    return str.toLowerCase().replace(/\w\S*/g, function(txt, offset) {
+        const word = txt.toUpperCase();
+        
+        // Check if it's a special case that should remain uppercase
+        if (keepUppercase.includes(word)) {
+            return word;
+        }
+        
+        // Check if it's a word that should remain lowercase (unless at start)
+        if (offset > 0 && keepLowercase.includes(txt.toLowerCase())) {
+            return txt.toLowerCase();
+        }
+        
+        // Otherwise, proper case it
+        return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
     });
 }
 
